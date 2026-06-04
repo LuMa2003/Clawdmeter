@@ -23,7 +23,7 @@ import httpx
 from bleak import BleakClient, BleakScanner
 from bleak.exc import BleakError
 
-DEVICE_NAME = "Claude Controller"
+DEVICE_NAME = "Clawdmeter"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000002"
 REQ_CHAR_UUID = "4c41555a-4465-7669-6365-000000000004"
@@ -156,13 +156,50 @@ async def poll_api(token: str) -> dict | None:
     return payload
 
 
+def _paired_address_from_registry() -> str | None:
+    """Read the paired Clawdmeter's BD_ADDR from the Windows BTHLE enumerator.
+
+    When the device is bonded as a HID, Windows holds the GATT link and the
+    peripheral stops advertising, so BleakScanner can't see it — the macOS
+    daemon hits the same wall and falls back to retrieveConnectedPeripherals.
+    On Windows the bonded address is exposed via PnP under the BTHLE bus
+    with an InstanceId like `BTHLE\\DEV_288485556569\\...`; the 12-hex run
+    after `DEV_` is the device's public BD_ADDR.
+    """
+    import subprocess
+    CREATE_NO_WINDOW = 0x08000000  # Windows flag — keeps a console from flashing under pythonw
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-PnpDevice -Class Bluetooth -ErrorAction SilentlyContinue | "
+             f"Where-Object FriendlyName -eq '{DEVICE_NAME}').InstanceId"],
+            capture_output=True, text=True, timeout=10,
+            stdin=subprocess.DEVNULL,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        log(f"Paired-device lookup failed: {e}")
+        return None
+    m = re.search(r"DEV_([0-9A-Fa-f]{12})", result.stdout or "")
+    if not m:
+        return None
+    mac = m.group(1).upper()
+    return ":".join(mac[i:i + 2] for i in range(0, 12, 2))
+
+
 async def scan_for_device():
     """Scan for DEVICE_NAME and return the BLEDevice, or None."""
     log(f"Scanning for '{DEVICE_NAME}' ({SCAN_TIMEOUT}s)...")
     device = await BleakScanner.find_device_by_name(DEVICE_NAME, timeout=SCAN_TIMEOUT)
     if device:
         log(f"Found: {device.address}")
-    return device  # BLEDevice or None — NOT an address string
+        return device
+    paired = _paired_address_from_registry()
+    if paired:
+        log(f"Not advertising — using bonded address {paired}")
+        from bleak.backends.device import BLEDevice
+        return BLEDevice(paired, DEVICE_NAME, None)
+    return None
 
 
 class Session:

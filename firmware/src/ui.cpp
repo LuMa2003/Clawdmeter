@@ -1,5 +1,6 @@
 #include "ui.h"
 #include "splash.h"
+#include "idle.h"
 #include <lvgl.h>
 #include "logo.h"
 #include "icons.h"
@@ -140,8 +141,13 @@ static const char* const spinner_frames[] = {
 #define SPINNER_COUNT 6
 #define SPINNER_PHASES (2 * (SPINNER_COUNT - 1))  // 10: ping-pong 0..5..0
 
+// Spinner timing halved vs. original — saves repaint cycles during screen-on.
+// Original: {260, 130, 130, 130, 130, 260}. Doubled values = ~half the FPS,
+// still feels alive but spins noticeably slower. Combined with the
+// idle_animation_should_freeze() check below, the spinner also stops entirely
+// after 5 min of no s/w change so it isn't just decoration during idle.
 static const uint16_t spinner_ms[SPINNER_COUNT] = {
-    260, 130, 130, 130, 130, 260,
+    520, 260, 260, 260, 260, 520,
 };
 
 static const char* const anim_messages[] = {
@@ -419,6 +425,10 @@ void ui_update(const UsageData* data) {
 
 void ui_tick_anim(void) {
     if (current_screen != SCREEN_USAGE) return;
+    // Freeze the spinner entirely when no Anthropic delta has landed for
+    // IDLE_ANIM_FREEZE_MS. Visual cue that nothing is processing AND saves
+    // a small amount of repaint cost during the data-stall window.
+    if (idle_animation_should_freeze()) return;
 
     uint32_t now = lv_tick_get();
 

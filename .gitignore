@@ -25,3 +25,7 @@ recovery/*.bin
 
 # One-off serial-screenshot captures used while iterating on the UI.
 phaseb_usage.*
+
+# Local scratch — custom framework-libs staging for the ESP-PM build path,
+# extra screenshots, etc. Multi-GB on disk; never goes into the repo.
+.local/

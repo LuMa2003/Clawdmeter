@@ -186,6 +186,15 @@ void setup() {
     Serial.begin(115200);
     delay(300);
 
+    // Drop the CPU clock from the 240 MHz default to 80 MHz. The dashboard is
+    // bursty light work — LVGL ticks, an occasional BLE callback, software
+    // pixel rotation for the CO5300. 80 MHz handles all of it comfortably and
+    // saves ~10-15 mA of active draw. 80 MHz is also the minimum stable clock
+    // with BLE peripheral active — going lower drops connections. APB scales
+    // with the CPU clock, so QSPI pixel pushes get slightly slower too;
+    // imperceptible on a status display.
+    setCpuFrequencyMhz(80);
+
     // Capture the wake cause BEFORE doing anything else — the value is only
     // meaningful until the next esp_*_sleep call clears it. Used to decide
     // boot screen (cold boot → splash, wake from deep sleep → usage view).

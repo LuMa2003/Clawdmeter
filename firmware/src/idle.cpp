@@ -79,6 +79,7 @@ bool idle_consume_wake_press(void) {
         // state. STATE_FADING_OUT mid-fade hasn't reached the sleep call yet.
         if (state == STATE_ASLEEP || state == STATE_LIGHT_SLEEP_IDLE) {
             display_hal_exit_sleep();
+            power_hal_set_low_power(false);
         }
         // Explicit button press clears the "we entered via host-lock" flag
         // so subsequent data deltas can re-wake naturally.
@@ -136,6 +137,7 @@ void idle_set_host_locked(bool locked) {
         if (state == STATE_LIGHT_SLEEP_IDLE || state == STATE_FADING_OUT) {
             if (state == STATE_LIGHT_SLEEP_IDLE) {
                 display_hal_exit_sleep();
+                power_hal_set_low_power(false);
             }
             begin_fade(awake_brightness, now);
             state = STATE_FADING_IN;
@@ -156,6 +158,7 @@ void idle_note_data_delta(int new_s_int, int new_w_int) {
     // that case (otherwise a polling daemon write would defeat lock-sleep).
     if (state == STATE_LIGHT_SLEEP_IDLE && !idle_entered_by_lock) {
         display_hal_exit_sleep();
+        power_hal_set_low_power(false);
         begin_fade(awake_brightness, last_data_delta_ms);
         state = STATE_FADING_IN;
         last_activity_ms = last_data_delta_ms;
@@ -184,6 +187,7 @@ void idle_tick(void) {
             || (state == STATE_FADING_OUT && fade_out_target == STATE_ASLEEP)) {
             if (state == STATE_ASLEEP) {
                 display_hal_exit_sleep();
+                power_hal_set_low_power(false);
             }
             begin_fade(awake_brightness, now);
             state = STATE_FADING_IN;
@@ -236,8 +240,11 @@ void idle_tick(void) {
             if (state == STATE_FADING_OUT) {
                 // Panel reaches 0 — issue the CO5300 sleep command so the
                 // panel's internal boost converter and driver shut down,
-                // not just the pixels.
+                // not just the pixels. Slow PMU polling at the same moment
+                // so the I2C bus stops chirping every 50 ms for a screen
+                // the user can't see.
                 display_hal_enter_sleep();
+                power_hal_set_low_power(true);
                 state = fade_out_target;
             } else {
                 state = STATE_AWAKE;

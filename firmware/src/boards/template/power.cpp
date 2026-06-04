@@ -25,6 +25,9 @@ bool power_hal_pwr_pressed(void) { return false; }
 bool power_hal_pwr_long_pressed(void) { return false; }
 bool power_hal_pwr_released(void) { return false; }
 
+// Set a slower polling cadence while the screen is off. See power_hal.h.
+void power_hal_set_low_power(bool low_power) { (void)low_power; }
+
 // Configure wake sources + enter deep sleep. Mirror the 2.16 port:
 //   esp_sleep_enable_timer_wakeup((uint64_t)wake_after_seconds * 1000000ULL);
 //   rtc_gpio_pullup_en((gpio_num_t)BTN_BACK_GPIO);

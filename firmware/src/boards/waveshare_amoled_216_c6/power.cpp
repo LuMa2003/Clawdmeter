@@ -93,6 +93,11 @@ bool power_hal_pwr_released(void) {
     return false;
 }
 
+void power_hal_set_low_power(bool low_power) {
+    // Stub. Mirror the 2.16 implementation if/when adopted.
+    (void)low_power;
+}
+
 void power_hal_enter_deep_sleep(uint32_t wake_after_seconds) {
     // Stub. If/when scheduled deep sleep is wired up on this port, mirror
     // the 2.16 implementation: AXP IRQ disable, esp_sleep_enable_timer_wakeup,

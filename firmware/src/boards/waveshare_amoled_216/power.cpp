@@ -11,9 +11,17 @@
 //   LONG     — ~1.5s mark, starts the hold-to-pair countdown
 //   POSITIVE — release edge, completes/cancels the gesture
 
+// Active-mode poll intervals (screen on).
 #define BATTERY_POLL_MS  2000
 #define CHARGING_POLL_MS 500
 #define PWR_POLL_MS      50
+// Low-power poll intervals (screen off, light sleep or user-input timeout).
+// Battery/charging slow by ~10-15x — invisible to the user. PWR polls slow
+// to 200 ms, which is the worst-case wake-press latency on a sleeping
+// device — imperceptible in practice.
+#define BATTERY_POLL_LP_MS  30000
+#define CHARGING_POLL_LP_MS 5000
+#define PWR_POLL_LP_MS      200
 
 static XPowersPMU pmu;
 
@@ -26,6 +34,7 @@ static bool     pwr_released_flag = false;
 static uint32_t last_battery_ms   = 0;
 static uint32_t last_charging_ms  = 0;
 static uint32_t last_pwr_ms       = 0;
+static bool     low_power_mode    = false;
 
 void power_hal_init(void) {
     if (!pmu.begin(Wire, AXP2101_ADDR, IIC_SDA, IIC_SCL)) {
@@ -62,17 +71,20 @@ void power_hal_init(void) {
 
 void power_hal_tick(void) {
     uint32_t now = millis();
+    const uint32_t chg_int = low_power_mode ? CHARGING_POLL_LP_MS : CHARGING_POLL_MS;
+    const uint32_t bat_int = low_power_mode ? BATTERY_POLL_LP_MS  : BATTERY_POLL_MS;
+    const uint32_t pwr_int = low_power_mode ? PWR_POLL_LP_MS      : PWR_POLL_MS;
 
-    if (now - last_charging_ms >= CHARGING_POLL_MS) {
+    if (now - last_charging_ms >= chg_int) {
         last_charging_ms = now;
         cached_charging = pmu.isCharging();
         cached_vbus     = pmu.isVbusIn();
     }
-    if (now - last_battery_ms >= BATTERY_POLL_MS) {
+    if (now - last_battery_ms >= bat_int) {
         last_battery_ms = now;
         cached_pct = pmu.getBatteryPercent();
     }
-    if (now - last_pwr_ms >= PWR_POLL_MS) {
+    if (now - last_pwr_ms >= pwr_int) {
         last_pwr_ms = now;
         pmu.getIrqStatus();
         if (pmu.isPekeyShortPressIrq())    pwr_pressed_flag  = true;
@@ -80,6 +92,10 @@ void power_hal_tick(void) {
         if (pmu.isPekeyPositiveIrq())      pwr_released_flag = true;
         pmu.clearIrqStatus();
     }
+}
+
+void power_hal_set_low_power(bool low_power) {
+    low_power_mode = low_power;
 }
 
 int  power_hal_battery_pct(void) { return cached_pct; }

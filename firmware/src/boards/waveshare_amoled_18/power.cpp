@@ -101,6 +101,12 @@ bool power_hal_pwr_released(void) {
     return false;
 }
 
+void power_hal_set_low_power(bool low_power) {
+    // Stub on this port — XCA9554 polled-PWR doesn't yet have a low-power
+    // mode wired up. Mirror the 2.16 power.cpp if adopting.
+    (void)low_power;
+}
+
 void power_hal_enter_deep_sleep(uint32_t wake_after_seconds) {
     // PWR button on the 1.8 routes through the XCA9554 IO expander, which
     // has no IRQ-to-RTC-GPIO wiring — deep-sleep wake-on-PWR isn't viable

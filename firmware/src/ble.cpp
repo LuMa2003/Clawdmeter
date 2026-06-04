@@ -105,6 +105,22 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         Serial.printf("BLE: connected from %s (active=%u)\n",
             info.getAddress().toString().c_str(),
             (unsigned)s->getConnectedCount());
+
+        // Request low-duty-cycle connection parameters. Default NimBLE
+        // intervals are ~30-50 ms which keeps the radio chirping constantly.
+        // We use slave latency instead: keep a short interval (37.5 ms) so
+        // HID keystrokes can fire on the very next interval when we have
+        // data to send, but let the peripheral skip up to 8 intervals when
+        // idle. Effective idle radio activity: ~300-450 ms between wake-ups,
+        // ~5-10x less than the default. The central may negotiate down,
+        // but most stacks (incl. Windows BT) honor reasonable requests.
+        //
+        // Units: min/max in 1.25 ms; timeout in 10 ms.
+        //   min=30 → 37.5 ms, max=60 → 75 ms, latency=8, timeout=500 → 5 s
+        // Supervision timeout must satisfy: timeout > (1 + latency) * max
+        //   (1+8) * 75 ms = 675 ms < 5000 ms ✓
+        s->updateConnParams(info.getConnHandle(), 30, 60, 8, 500);
+
         // Keep advertising while a connection slot is still free so a second
         // central (e.g. the host daemon alongside an OS-held HID link) can
         // discover and connect. NimBLE auto-stops advertising on each accept.

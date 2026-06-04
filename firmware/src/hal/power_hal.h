@@ -27,6 +27,13 @@ bool power_hal_pwr_long_pressed(void);
 // or cancels the hold-to-pair gesture.
 bool power_hal_pwr_released(void);
 
+// Switch the PMU/button polling cadence between active and low-power modes.
+// When low_power=true the battery/charging/PWR-button polls slow down by
+// ~10x — the user can't see the indicator while the screen is off anyway,
+// and the PWR press latency to wake stays under 200 ms (imperceptible).
+// Saves ~1-2 mA on the I2C bus + CPU during long idle windows.
+void power_hal_set_low_power(bool low_power);
+
 // Configure wake sources and ENTER deep sleep. Does not return.
 //
 // Each board picks its own wake GPIO (the BOOT/primary button on the 2.16;

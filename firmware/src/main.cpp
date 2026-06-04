@@ -4,6 +4,7 @@
 #include <ArduinoJson.h>
 #include <esp_heap_caps.h>
 #include <esp_sleep.h>
+#include <esp_pm.h>
 
 #include "data.h"
 #include "ui.h"
@@ -185,6 +186,24 @@ extern "C" void board_init(void);
 void setup() {
     Serial.begin(115200);
     delay(300);
+
+    // Enable IDF's automatic light-sleep framework. Requires the framework-
+    // libs override in platformio.ini — CONFIG_PM_ENABLE=y must be baked into
+    // the precompiled IDF kernel. Without that, esp_pm_configure() returns
+    // ESP_ERR_NOT_SUPPORTED and is a no-op. With it, the FreeRTOS idle task
+    // automatically calls esp_light_sleep_start() during quiet windows.
+    // ~50% reduction in active-state CPU current on top of the 80 MHz cap.
+    {
+        esp_pm_config_esp32s3_t cfg = {
+            .max_freq_mhz       = 80,   // matches setCpuFrequencyMhz cap below
+            .min_freq_mhz       = 40,   // floor when no APB consumer is active
+            .light_sleep_enable = true,
+        };
+        esp_err_t err = esp_pm_configure(&cfg);
+        Serial.printf("pm_init: err=%d (0=OK; 0x106=ESP_ERR_NOT_SUPPORTED → custom libs not active)\n", err);
+        // Keep RTC peripheral domain on so USB-Serial-JTAG survives light sleep.
+        esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+    }
 
     // Drop the CPU clock from the 240 MHz default to 80 MHz. The dashboard is
     // bursty light work — LVGL ticks, an occasional BLE callback, software

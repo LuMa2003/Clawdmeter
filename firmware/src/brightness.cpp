@@ -3,11 +3,12 @@
 #include <Preferences.h>
 #include <Arduino.h>
 
-// Four-step ramp. The default (index 2) is 200 — identical to the prior
-// hard-coded DISPLAY_DEFAULT_BRIGHTNESS, so cycling is purely additive.
+// Four-step ramp. Fresh-install default is 128 (index 1, ~50%) — half the
+// panel current of the previous 200 default without losing readability. Users
+// who want brighter cycle up via the PWR button; the choice persists in NVS.
 static const uint8_t LEVELS[] = {64, 128, 200, 255};
 #define LEVELS_COUNT (sizeof(LEVELS) / sizeof(LEVELS[0]))
-#define DEFAULT_IDX  2
+#define DEFAULT_IDX  1
 
 static uint8_t cur_idx = DEFAULT_IDX;
 

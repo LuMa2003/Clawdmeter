@@ -3,6 +3,7 @@
 #include <lvgl.h>
 #include <ArduinoJson.h>
 #include <esp_heap_caps.h>
+#include <esp_sleep.h>
 
 #include "data.h"
 #include "ui.h"
@@ -184,7 +185,14 @@ extern "C" void board_init(void);
 void setup() {
     Serial.begin(115200);
     delay(300);
-    Serial.println("{\"ready\":true}");
+
+    // Capture the wake cause BEFORE doing anything else — the value is only
+    // meaningful until the next esp_*_sleep call clears it. Used to decide
+    // boot screen (cold boot → splash, wake from deep sleep → usage view).
+    const esp_sleep_wakeup_cause_t wake_cause = esp_sleep_get_wakeup_cause();
+    const bool waking_from_deep_sleep =
+        (wake_cause == ESP_SLEEP_WAKEUP_TIMER || wake_cause == ESP_SLEEP_WAKEUP_EXT1);
+    Serial.printf("{\"ready\":true,\"wake_cause\":%d}\n", (int)wake_cause);
 
     board_init();
 
@@ -224,7 +232,11 @@ void setup() {
     ui_init();
     ui_update_ble_status(ble_get_state(), ble_get_device_name(), ble_get_mac_address());
     ui_update_battery(power_hal_battery_pct(), power_hal_is_charging());
-    ui_show_screen(SCREEN_SPLASH);
+    // Cold boot lands on splash (its long-standing role as the "look! a
+    // device!" intro screen). Wake-from-deep-sleep is functional — the
+    // user is already familiar with the device and wants the dashboard
+    // back where it was. Wake-cause was captured at the top of setup().
+    ui_show_screen(waking_from_deep_sleep ? SCREEN_USAGE : SCREEN_SPLASH);
 
     Serial.printf("Dashboard ready (%s, %dx%d), waiting for data on BLE...\n",
         board_caps().name, W, H);
@@ -243,9 +255,19 @@ static ble_state_t last_ble_state = BLE_STATE_INIT;
 //   6.0s (+4500)          → DISARMED (no clear; AXP powers off at 8s)
 #define PAIR_ARM_AFTER_LONG_MS    1500   // 3.0s total
 #define PAIR_DISARM_AFTER_LONG_MS 4500   // 6.0s total
+// PWR held past the pair-gesture disarm point becomes a deep-sleep gesture.
+// 7.0s total = 1.0s after pair disarms, 3.0s before AXP force-shutdown at
+// 10s (bumped from the default 8s for safety margin in power.cpp).
+#define DEEP_SLEEP_AFTER_DISARM_MS 1000  // 7.0s total
 enum pair_state_t { PAIR_IDLE, PAIR_PENDING, PAIR_ARMED };
 static pair_state_t pair_state        = PAIR_IDLE;
 static uint32_t     pair_long_seen_ms = 0;
+// Set when pair_tick disarms via timeout (PAIR_ARMED → PAIR_IDLE because the
+// user held past PAIR_DISARM_AFTER_LONG_MS without releasing). Zero otherwise.
+// Read by deep_sleep_tick to drive the 7s manual-sleep gesture, cleared on
+// the eventual PWR release. NOT set when pair disarms via release — that's a
+// normal pair attempt, not a sleep intent.
+static uint32_t     pair_disarmed_at_ms = 0;
 
 static void pair_tick(void) {
     if (pair_state == PAIR_IDLE && power_hal_pwr_long_pressed()) {
@@ -273,8 +295,34 @@ static void pair_tick(void) {
         pair_state = PAIR_ARMED;
         Serial.println("Pair: armed — release to pair");
     } else if (pair_state == PAIR_ARMED && held >= PAIR_DISARM_AFTER_LONG_MS) {
-        pair_state = PAIR_IDLE;  // power-off territory; don't pair
-        Serial.println("Pair: disarmed (holding toward power-off)");
+        pair_state = PAIR_IDLE;            // power-off territory; don't pair
+        pair_disarmed_at_ms = millis();    // hand the held PWR off to deep_sleep_tick
+        Serial.println("Pair: disarmed (holding past 6s — keep holding ~1s for sleep, release for no-op)");
+    }
+}
+
+// Manual deep-sleep gesture: hold PWR for ~7s. The first 6s belong to the
+// pair-tick state machine (1.5s → PENDING, 3s → ARMED, 6s → DISARMED). When
+// pair_tick disarms via timeout (NOT via release), it records the disarm
+// time in `pair_disarmed_at_ms`. We watch that and, if the user keeps
+// holding for another second, fire `idle_enter_deep_sleep`. AXP force-shutdown
+// at 10s caps the window — gives ~3s tolerance past the deep-sleep trigger.
+//
+// Must run AFTER pair_tick so the gesture composes correctly (a 3-6s hold
+// completes the pair gesture and never reaches the disarmed-by-timeout state).
+static void deep_sleep_tick(void) {
+    if (pair_disarmed_at_ms == 0) return;
+
+    // Release after disarm → no-op; user changed their mind. Clear the gesture.
+    if (power_hal_pwr_released()) {
+        pair_disarmed_at_ms = 0;
+        Serial.println("PWR long-hold: released after disarm — no sleep");
+        return;
+    }
+
+    if ((millis() - pair_disarmed_at_ms) >= DEEP_SLEEP_AFTER_DISARM_MS) {
+        pair_disarmed_at_ms = 0;
+        idle_enter_deep_sleep("manual long-hold");  // never returns
     }
 }
 
@@ -341,6 +389,7 @@ void loop() {
         }
 
         pair_tick();
+        deep_sleep_tick();  // must run AFTER pair_tick — composes via pair_disarmed_at_ms
     }
 
     ble_state_t bs = ble_get_state();

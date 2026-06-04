@@ -1,4 +1,5 @@
 #pragma once
+#include <stdint.h>
 
 // Power / battery / power-button abstraction. Replaces the legacy power.h
 // API but keeps the same shape so existing call sites stay clean.
@@ -25,3 +26,15 @@ bool power_hal_pwr_long_pressed(void);
 // Edge-triggered: true once on the PWR release edge, then clears. Completes
 // or cancels the hold-to-pair gesture.
 bool power_hal_pwr_released(void);
+
+// Configure wake sources and ENTER deep sleep. Does not return.
+//
+// Each board picks its own wake GPIO (the BOOT/primary button on the 2.16;
+// no PWR-button wake is possible because the AXP2101 IRQ isn't routed to
+// any RTC GPIO) so the shared idle layer doesn't need to know about pin
+// numbers. The timer arms an RTC-counter wake N seconds from now; pass 0
+// to disable the timer wake (button-only).
+//
+// Pre-conditions the caller should already have done: display off + panel
+// asleep, BLE disconnected, ~150 ms drained for the disconnect PDU.
+void power_hal_enter_deep_sleep(uint32_t wake_after_seconds);

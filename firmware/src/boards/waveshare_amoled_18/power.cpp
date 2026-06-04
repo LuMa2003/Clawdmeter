@@ -100,3 +100,10 @@ bool power_hal_pwr_released(void) {
     if (pwr_released_flag) { pwr_released_flag = false; return true; }
     return false;
 }
+
+void power_hal_enter_deep_sleep(uint32_t wake_after_seconds) {
+    // PWR button on the 1.8 routes through the XCA9554 IO expander, which
+    // has no IRQ-to-RTC-GPIO wiring — deep-sleep wake-on-PWR isn't viable
+    // on this board. Stub: no scheduled deep sleep yet on this port.
+    (void)wake_after_seconds;
+}

@@ -42,3 +42,17 @@ void idle_note_data_delta(int new_s_int, int new_w_int);
 // True when no real delta in s/w has been seen for IDLE_ANIM_FREEZE_MS.
 // ui_tick_anim() checks this to stop redrawing the spinner during idle.
 bool idle_animation_should_freeze(void);
+
+// ---- Deep sleep (Phase C) ----
+
+// Pure helper: compute seconds from the last known host wall-clock to the
+// next Mon-Fri 07:00. Mon 22:00 → ~9 h, Sat 17:00 → ~38 h, Sun 23:59 → ~7 h.
+// Falls back to 12 hours when no clock has ever been seen (safe default —
+// the deep-sleep entry only fires after a real payload was received anyway).
+uint32_t idle_seconds_to_next_work_window(void);
+
+// Tear everything down and enter ESP32 deep sleep. Does not return.
+// Wake sources are configured by power_hal_enter_deep_sleep() — currently
+// the timer + the board's BOOT/primary button as an RTC-GPIO EXT1 wake.
+// `reason` is logged once over Serial before the radio goes dark.
+void idle_enter_deep_sleep(const char* reason) __attribute__((noreturn));

@@ -21,6 +21,12 @@ void ble_send_ack(void);
 void ble_send_nack(void);
 void ble_request_refresh(void);
 
+// Tear down all active GATT connections and stop advertising. Used by the
+// deep-sleep entry sequence to give the peer a clean disconnect PDU before
+// the radio goes dark for hours. NOT a full NimBLE deinit — bonds persist
+// in NVS so the device reconnects without re-pairing on wake.
+void ble_disconnect_all(void);
+
 // BLE HID keyboard
 void ble_keyboard_press(uint8_t key, uint8_t modifier);
 void ble_keyboard_release(void);

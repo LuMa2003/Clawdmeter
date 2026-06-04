@@ -24,3 +24,13 @@ bool power_hal_pwr_pressed(void) { return false; }
 // or the 1.8" (software hold-timing off a polled GPIO) port. Stub = no gesture.
 bool power_hal_pwr_long_pressed(void) { return false; }
 bool power_hal_pwr_released(void) { return false; }
+
+// Configure wake sources + enter deep sleep. Mirror the 2.16 port:
+//   esp_sleep_enable_timer_wakeup((uint64_t)wake_after_seconds * 1000000ULL);
+//   rtc_gpio_pullup_en((gpio_num_t)BTN_BACK_GPIO);
+//   esp_sleep_enable_ext1_wakeup(1ULL << BTN_BACK_GPIO, ESP_EXT1_WAKEUP_ALL_LOW);
+//   esp_deep_sleep_start();
+// Stub: scheduled deep sleep disabled.
+void power_hal_enter_deep_sleep(uint32_t wake_after_seconds) {
+    (void)wake_after_seconds;
+}

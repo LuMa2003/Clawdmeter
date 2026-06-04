@@ -272,6 +272,26 @@ void ble_request_refresh(void) {
     }
 }
 
+void ble_disconnect_all(void) {
+    // Stop advertising first so no new peer races in while we're closing
+    // out the existing ones.
+    NimBLEDevice::stopAdvertising();
+
+    if (!server) return;
+
+    // Disconnect every connected peer. There are at most 2 (the daemon plus
+    // the OS holding the HID link), so a small loop is fine.
+    const uint8_t n = server->getConnectedCount();
+    for (uint8_t i = 0; i < n; i++) {
+        NimBLEConnInfo info = server->getPeerInfo(i);
+        const uint16_t handle = info.getConnHandle();
+        if (handle != 0xFFFF) {
+            server->disconnect(handle);
+        }
+    }
+    Serial.printf("BLE: disconnected %u peer(s)\n", n);
+}
+
 void ble_keyboard_press(uint8_t key, uint8_t modifier) {
     if (state != BLE_STATE_CONNECTED || !input_kbd) return;
     // HID report: [modifier, reserved, key1, key2, key3, key4, key5, key6]

@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "idle.h"
 #include "idle_cfg.h"
+#include "ble.h"
 #include "hal/display_hal.h"
 #include "hal/power_hal.h"
 
@@ -189,6 +190,20 @@ void idle_tick(void) {
         }
     }
 
+    // ---- Work-window-closed → deep sleep ----
+    // Whenever we're in any non-fading state with a stale data window AND the
+    // clock has moved out of the work window, drop straight into deep sleep.
+    // Covers both "user closes laptop at 18:01 while device is awake" and
+    // "device has been light-sleep-idle since 17:50 and the window just closed".
+    // Fires only after we've seen at least one real data delta, so a fresh
+    // boot before any daemon traffic can't accidentally sleep forever.
+    if (last_data_delta_ms != 0
+        && (now - last_data_delta_ms) >= IDLE_DATA_TIMEOUT_MS
+        && !in_work_window()
+        && (state == STATE_AWAKE || state == STATE_LIGHT_SLEEP_IDLE || state == STATE_ASLEEP)) {
+        idle_enter_deep_sleep("work-window closed");  // does not return
+    }
+
     switch (state) {
     case STATE_AWAKE:
         // Existing user-input timeout (30 min) → STATE_ASLEEP.
@@ -244,4 +259,48 @@ void idle_tick(void) {
         // data delta or unlock (STATE_LIGHT_SLEEP_IDLE).
         break;
     }
+}
+
+// ---- Deep sleep (Phase C) ----
+
+uint32_t idle_seconds_to_next_work_window(void) {
+    if (cur_dow < 0 || cur_hour < 0 || cur_min < 0) {
+        return 12UL * 3600UL;  // safe fallback — should never trigger in practice
+    }
+    const int mins_today        = (int)cur_hour * 60 + (int)cur_min;
+    const int target_mins_today = IDLE_WORK_HOUR_START * 60;
+
+    // Walk forward day by day (up to a full week) until we find the next
+    // Mon-Fri at 07:00 that is strictly in the future. Plain loop avoids
+    // any modular-arithmetic week-wrap subtleties.
+    for (int d = 0; d <= 7; d++) {
+        int target_dow = ((int)cur_dow + d) % 7;
+        if (target_dow > 4) continue;                       // skip Sat/Sun
+        if (d == 0 && target_mins_today <= mins_today) continue;  // 07:00 already passed today
+        int total_mins;
+        if (d == 0) total_mins = target_mins_today - mins_today;
+        else        total_mins = d * 24 * 60 - mins_today + target_mins_today;
+        return (uint32_t)total_mins * 60UL;
+    }
+    return 12UL * 3600UL;                                   // unreachable, but keeps the compiler happy
+}
+
+void idle_enter_deep_sleep(const char* reason) {
+    const uint32_t secs = idle_seconds_to_next_work_window();
+    Serial.printf("deep_sleep: %s, wake in %us\n", reason, secs);
+    Serial.flush();
+
+    // Order matters: stop writing to the panel BEFORE telling it to sleep,
+    // disconnect BLE BEFORE the radio gets pulled out from under NimBLE.
+    display_hal_set_brightness(0);
+    display_hal_enter_sleep();
+
+    ble_disconnect_all();
+    delay(150);  // let NimBLE flush the disconnect PDU before deep sleep
+
+    power_hal_enter_deep_sleep(secs);  // configures wake sources + esp_deep_sleep_start, never returns
+    // Belt-and-braces — if a stub board's power_hal_enter_deep_sleep does
+    // return, fall through to a software reset rather than spin in a broken
+    // state. Shared code stays warning-clean about the noreturn attribute.
+    esp_restart();
 }

@@ -18,3 +18,10 @@ daemon/.venv/
 # Python bytecode cache
 __pycache__/
 *.pyc
+
+# Local firmware-image snapshots used by recovery/restore.ps1. The
+# .ps1 itself is committed; the multi-MB factory binaries are not.
+recovery/*.bin
+
+# One-off serial-screenshot captures used while iterating on the UI.
+phaseb_usage.*

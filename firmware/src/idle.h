@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include <stdint.h>
 
 void idle_init(void);
 void idle_tick(void);
@@ -20,3 +21,24 @@ bool idle_consume_wake_press(void);
 // sleeves, etc.). Callers use this to silently drop touch events while the
 // panel is dark.
 bool idle_is_asleep(void);
+
+// ---- Host-driven activity signals (set from main.cpp parse_json) ----
+
+// Latest host wall-clock stamp. dow=Mon..Sun (0..6) per Python weekday();
+// hour 0..23; minute 0..59. Pass any value <0 to mean "not yet known"
+// (idle will refuse to screen-off until a real stamp lands).
+void idle_set_clock(int8_t dow, int8_t hour, int8_t minute);
+
+// Host PC lock state. Transitioning to locked while awake immediately
+// triggers a fade-out to STATE_LIGHT_SLEEP_IDLE. Transitioning to
+// unlocked while in that state wakes the device.
+void idle_set_host_locked(bool locked);
+
+// Called for every successful JSON payload. If the integer values of s or w
+// differ from what we last saw, bumps "last data activity" and wakes
+// STATE_LIGHT_SLEEP_IDLE. Equal values are silent (no FSM effect).
+void idle_note_data_delta(int new_s_int, int new_w_int);
+
+// True when no real delta in s/w has been seen for IDLE_ANIM_FREEZE_MS.
+// ui_tick_anim() checks this to stop redrawing the spinner during idle.
+bool idle_animation_should_freeze(void);

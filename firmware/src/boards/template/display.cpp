@@ -28,6 +28,16 @@ void display_hal_set_brightness(uint8_t level) {
     // gfx->setBrightness(level);
 }
 
+// Panel-controller sleep. Most MIPI-DSI/QSPI AMOLED drivers expose
+// displayOff()/displayOn() (SLPIN/SLPOUT). No-op if your panel doesn't
+// have a documented sleep mode — the firmware will rely on brightness 0.
+void display_hal_enter_sleep(void) {
+    // if (gfx) gfx->displayOff();
+}
+void display_hal_exit_sleep(void) {
+    // if (gfx) gfx->displayOn();
+}
+
 void display_hal_fill_screen(uint16_t color) {
     (void)color;
     // gfx->fillScreen(color);

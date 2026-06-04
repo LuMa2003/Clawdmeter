@@ -7,17 +7,34 @@
 enum IdleState {
     STATE_AWAKE,
     STATE_FADING_OUT,
-    STATE_ASLEEP,
+    STATE_ASLEEP,            // existing user-input timeout fade (30 min)
+    STATE_LIGHT_SLEEP_IDLE,  // host-lock OR 20-min data-stall, BLE up, screen+display asleep
     STATE_FADING_IN,
 };
 
 static IdleState state = STATE_AWAKE;
+static IdleState fade_out_target = STATE_ASLEEP;  // where to land on fade-out completion
 static uint32_t last_activity_ms = 0;
 static uint32_t fade_started_ms  = 0;
 static uint32_t fade_last_step_ms = 0;
 static uint8_t  fade_from = DISPLAY_DEFAULT_BRIGHTNESS;
 static uint8_t  fade_to   = 0;
 static uint8_t  awake_brightness = DISPLAY_DEFAULT_BRIGHTNESS;  // user-set "full" level (brightness.cpp)
+
+// ---- Phase B state: host clock, lock, and data-delta tracking ----
+// Clock sentinel: int8_t < 0 means "no stamp seen yet" — work-window check
+// fails-safe to "keep screen on" in that case.
+static int8_t   cur_dow  = -1;
+static int8_t   cur_hour = -1;
+static int8_t   cur_min  = -1;
+static bool     cur_host_locked = false;
+static int      last_s_int = -1;
+static int      last_w_int = -1;
+static uint32_t last_data_delta_ms = 0;
+// Records why we entered STATE_LIGHT_SLEEP_IDLE so the auto-wake path can
+// pick the right re-entry condition (host-lock only re-wakes on unlock,
+// data-stall wakes on any real delta).
+static bool     idle_entered_by_lock = false;
 
 static void apply_brightness(uint8_t b) {
     display_hal_set_brightness(b);
@@ -54,9 +71,17 @@ void idle_note_activity(void) {
 }
 
 bool idle_consume_wake_press(void) {
-    if (state == STATE_ASLEEP || state == STATE_FADING_OUT) {
+    if (state == STATE_ASLEEP || state == STATE_LIGHT_SLEEP_IDLE || state == STATE_FADING_OUT) {
         uint32_t now = millis();
         last_activity_ms = now;
+        // Reverse the panel-sleep side effect when waking from a fully-dark
+        // state. STATE_FADING_OUT mid-fade hasn't reached the sleep call yet.
+        if (state == STATE_ASLEEP || state == STATE_LIGHT_SLEEP_IDLE) {
+            display_hal_exit_sleep();
+        }
+        // Explicit button press clears the "we entered via host-lock" flag
+        // so subsequent data deltas can re-wake naturally.
+        idle_entered_by_lock = false;
         begin_fade(awake_brightness, now);
         state = STATE_FADING_IN;
         return true;
@@ -72,17 +97,93 @@ bool idle_consume_wake_press(void) {
 }
 
 bool idle_is_asleep(void) {
-    return state == STATE_ASLEEP || state == STATE_FADING_OUT;
+    return state == STATE_ASLEEP
+        || state == STATE_LIGHT_SLEEP_IDLE
+        || state == STATE_FADING_OUT;
+}
+
+// ---- Phase B helpers ----
+
+static bool in_work_window(void) {
+    if (cur_dow < 0 || cur_hour < 0) return false;       // no clock yet → fail-safe (stays on)
+    if (cur_dow > 4) return false;                       // Sat/Sun
+    return cur_hour >= IDLE_WORK_HOUR_START && cur_hour < IDLE_WORK_HOUR_END;
+}
+
+void idle_set_clock(int8_t dow, int8_t hour, int8_t minute) {
+    cur_dow  = dow;
+    cur_hour = hour;
+    cur_min  = minute;
+}
+
+void idle_set_host_locked(bool locked) {
+    if (locked == cur_host_locked) return;               // no edge
+    cur_host_locked = locked;
+    uint32_t now = millis();
+    if (locked) {
+        // Lock event — immediate light-sleep. Only fades from a fully-awake
+        // state; if a fade is already in progress (user-input fade etc.)
+        // let it complete, the timer-based paths will hand off.
+        if (state == STATE_AWAKE) {
+            begin_fade(0, now);
+            state = STATE_FADING_OUT;
+            fade_out_target = STATE_LIGHT_SLEEP_IDLE;
+            idle_entered_by_lock = true;
+        }
+    } else {
+        // Unlock — wake if we're in the dark path we entered.
+        if (state == STATE_LIGHT_SLEEP_IDLE || state == STATE_FADING_OUT) {
+            if (state == STATE_LIGHT_SLEEP_IDLE) {
+                display_hal_exit_sleep();
+            }
+            begin_fade(awake_brightness, now);
+            state = STATE_FADING_IN;
+            last_activity_ms = now;
+            last_data_delta_ms = now;                    // unlock acts as a fresh activity stamp
+            idle_entered_by_lock = false;
+        }
+    }
+}
+
+void idle_note_data_delta(int new_s_int, int new_w_int) {
+    if (new_s_int == last_s_int && new_w_int == last_w_int) return;
+    last_s_int = new_s_int;
+    last_w_int = new_w_int;
+    last_data_delta_ms = millis();
+    // Wake from a data-driven dark state. Don't auto-wake if we went dark
+    // because the host locked — only an unlock should bring us back in
+    // that case (otherwise a polling daemon write would defeat lock-sleep).
+    if (state == STATE_LIGHT_SLEEP_IDLE && !idle_entered_by_lock) {
+        display_hal_exit_sleep();
+        begin_fade(awake_brightness, last_data_delta_ms);
+        state = STATE_FADING_IN;
+        last_activity_ms = last_data_delta_ms;
+    }
+}
+
+bool idle_animation_should_freeze(void) {
+    if (last_data_delta_ms == 0) return false;            // no delta seen yet → keep animating
+    return (millis() - last_data_delta_ms) >= IDLE_ANIM_FREEZE_MS;
 }
 
 void idle_tick(void) {
     uint32_t now = millis();
 
-    // While on USB power (if configured), don't sleep — and wake from sleep
-    // when power comes back. Treats USB-in as continuous activity.
+    // While on USB power (if configured), the 30-min user-input timeout
+    // doesn't put the device to sleep, and an already-sleeping device wakes
+    // when power comes back. This DELIBERATELY does NOT override
+    // STATE_LIGHT_SLEEP_IDLE — that state is reached only via a deliberate
+    // signal (host lock, or 20-min Anthropic data-stall) where the user has
+    // either walked away or explicitly stepped back from work; USB power
+    // shouldn't undo that. STATE_ASLEEP is the legacy user-input timeout
+    // and keeps its original "USB == stay on" semantics.
     if (!IDLE_SLEEP_WHEN_CHARGING && power_hal_is_vbus_in()) {
         last_activity_ms = now;
-        if (state == STATE_ASLEEP || state == STATE_FADING_OUT) {
+        if (state == STATE_ASLEEP
+            || (state == STATE_FADING_OUT && fade_out_target == STATE_ASLEEP)) {
+            if (state == STATE_ASLEEP) {
+                display_hal_exit_sleep();
+            }
             begin_fade(awake_brightness, now);
             state = STATE_FADING_IN;
         }
@@ -90,9 +191,22 @@ void idle_tick(void) {
 
     switch (state) {
     case STATE_AWAKE:
+        // Existing user-input timeout (30 min) → STATE_ASLEEP.
         if (now - last_activity_ms >= IDLE_TIMEOUT_MS) {
             begin_fade(0, now);
             state = STATE_FADING_OUT;
+            fade_out_target = STATE_ASLEEP;
+            break;
+        }
+        // Data-stall trigger: during work hours, screen-off after
+        // IDLE_DATA_TIMEOUT_MS without an integer change in s/w. Requires
+        // a real clock stamp and at least one data delta seen.
+        if (in_work_window() && last_data_delta_ms != 0
+            && (now - last_data_delta_ms) >= IDLE_DATA_TIMEOUT_MS) {
+            begin_fade(0, now);
+            state = STATE_FADING_OUT;
+            fade_out_target = STATE_LIGHT_SLEEP_IDLE;
+            idle_entered_by_lock = false;
         }
         break;
 
@@ -104,7 +218,15 @@ void idle_tick(void) {
         uint32_t elapsed = now - fade_started_ms;
         if (elapsed >= dur) {
             apply_brightness(fade_to);
-            state = (state == STATE_FADING_OUT) ? STATE_ASLEEP : STATE_AWAKE;
+            if (state == STATE_FADING_OUT) {
+                // Panel reaches 0 — issue the CO5300 sleep command so the
+                // panel's internal boost converter and driver shut down,
+                // not just the pixels.
+                display_hal_enter_sleep();
+                state = fade_out_target;
+            } else {
+                state = STATE_AWAKE;
+            }
         } else {
             // Linear interpolation fade_from -> fade_to over dur ms.
             int32_t span = (int32_t)fade_to - (int32_t)fade_from;
@@ -117,6 +239,9 @@ void idle_tick(void) {
     }
 
     case STATE_ASLEEP:
+    case STATE_LIGHT_SLEEP_IDLE:
+        // Passive — wakes are event-driven: button (STATE_ASLEEP),
+        // data delta or unlock (STATE_LIGHT_SLEEP_IDLE).
         break;
     }
 }

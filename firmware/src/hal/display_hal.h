@@ -30,3 +30,11 @@ void display_hal_tick(void);
 
 // LVGL flush regions must be even-aligned on the CO5300; harmless on others.
 void display_hal_round_area(int32_t* x1, int32_t* y1, int32_t* x2, int32_t* y2);
+
+// Panel-controller sleep mode. Beyond brightness 0 (which only turns
+// off the pixels), this drops the controller's internal boost and
+// goes into vendor-defined low-power state. Wake takes ~10-50 ms for
+// the panel to re-init. Boards without a documented sleep command
+// should implement as no-ops.
+void display_hal_enter_sleep(void);
+void display_hal_exit_sleep(void);

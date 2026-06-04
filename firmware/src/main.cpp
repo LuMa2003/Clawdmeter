@@ -111,6 +111,10 @@ static bool parse_json(const char* json, UsageData* out) {
     out->weekly_reset_mins = doc["wr"] | -1;
     strlcpy(out->status, doc["st"] | "unknown", sizeof(out->status));
     out->ok = doc["ok"] | false;
+    out->dow = doc["dow"] | -1;
+    out->hour = doc["hour"] | -1;
+    out->min = doc["min"] | -1;
+    out->host_locked = doc["locked"] | false;
     out->valid = true;
     return true;
 }
@@ -359,6 +363,14 @@ void loop() {
 
     if (ble_has_data()) {
         if (parse_json(ble_get_data(), &usage)) {
+            // Feed the activity-driven idle FSM. Clock first (so the work-
+            // window check is current); host-lock next (event-driven, may
+            // fire an immediate fade-out); data-delta last (may wake from
+            // a data-stall dark state).
+            idle_set_clock(usage.dow, usage.hour, usage.min);
+            idle_set_host_locked(usage.host_locked);
+            idle_note_data_delta((int)usage.session_pct, (int)usage.weekly_pct);
+
             int g_before = usage_rate_group();
             usage_rate_sample(usage.session_pct);
             int g_after = usage_rate_group();

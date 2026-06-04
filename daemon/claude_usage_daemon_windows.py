@@ -145,6 +145,7 @@ async def poll_api(token: str) -> dict | None:
         except ValueError:
             return 0
 
+    local_now = datetime.datetime.now()
     payload = {
         "s": pct(hdr("anthropic-ratelimit-unified-5h-utilization")),
         "sr": reset_minutes(hdr("anthropic-ratelimit-unified-5h-reset")),
@@ -152,6 +153,12 @@ async def poll_api(token: str) -> dict | None:
         "wr": reset_minutes(hdr("anthropic-ratelimit-unified-7d-reset")),
         "st": hdr("anthropic-ratelimit-unified-5h-status", "unknown"),
         "ok": True,
+        # Host wall-clock stamp — firmware uses this for the work-window check
+        # (only screens-off during 07:00-18:00 Mon-Fri) and for computing the
+        # scheduled-deep-sleep wake-up offset. weekday(): Mon=0..Sun=6.
+        "dow": local_now.weekday(),
+        "hour": local_now.hour,
+        "min": local_now.minute,
     }
     return payload
 

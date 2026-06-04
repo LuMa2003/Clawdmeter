@@ -61,10 +61,21 @@ class TrayState:
         self.state: str = "scanning"       # "connected" | "scanning" | "error"
         self.reason: str = ""              # error reason string (D-04)
         self.last_sync: float | None = None  # time.time() of last successful write
+        # Latest Windows host lock state. Written by the HostLockListener thread
+        # (host_lock_windows.py) on WM_WTSSESSION_CHANGE; read by the daemon's
+        # payload builder. Bool assignment is atomic in CPython — no lock needed
+        # for this single-scalar bridge.
+        self.host_locked: bool = False
 
         # Populated by daemon main() at startup:
         self.loop = None        # asyncio running loop (for call_soon_threadsafe)
         self.stop_event = None  # asyncio.Event (the existing clean-shutdown hook)
+        # Set by connect_and_run() each time a Session comes up — a
+        # thread-safe trampoline that flips the session's refresh_requested
+        # event. Lets the host-lock listener wake the poll loop instantly
+        # so a lock signal doesn't have to wait up to POLL_INTERVAL (60s)
+        # for the next payload. None between connections (callback no-ops).
+        self.request_refresh = None  # type: ignore[assignment]
 
     def set_connected(self, ts: float) -> None:
         """Called after write_payload returns True.  ts = time.time()."""
@@ -189,6 +200,25 @@ def main() -> None:
 
     ts = TrayState()
     icon = pystray.Icon("Clawdmeter", images["scanning"], "Clawdmeter")
+
+    # --- host-lock listener (Phase B) ---
+    # Feeds ts.host_locked from Win32 session events. Background daemon thread;
+    # exceptions inside it are logged but don't take down the tray.
+    def _on_lock_change(locked: bool) -> None:
+        ts.host_locked = locked
+        # Wake the BLE poll loop NOW so the firmware learns about the lock
+        # state change within ~1 s (one API poll round-trip), not within
+        # the next 60-second polling window.
+        refresh = ts.request_refresh
+        if refresh is not None:
+            refresh()
+
+    try:
+        from daemon.host_lock_windows import HostLockListener
+        host_lock = HostLockListener(on_change=_on_lock_change)
+        host_lock.start()
+    except Exception as e:  # any import / startup failure
+        daemon_log(f"host-lock listener disabled: {e!r}")
 
     # --- background thread: asyncio loop ---
     def _run_daemon() -> None:

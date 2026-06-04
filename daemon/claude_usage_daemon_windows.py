@@ -106,7 +106,7 @@ class AuthError(Exception):
     failed` DNS blip wrongly fired the 'token expired' toast)."""
 
 
-async def poll_api(token: str) -> dict | None:
+async def poll_api(token: str, tray_state=None) -> dict | None:
     headers = dict(API_HEADERS_TEMPLATE)
     headers["Authorization"] = f"Bearer {token}"
     try:
@@ -159,6 +159,10 @@ async def poll_api(token: str) -> dict | None:
         "dow": local_now.weekday(),
         "hour": local_now.hour,
         "min": local_now.minute,
+        # Windows session lock state — fed by HostLockListener on
+        # WM_WTSSESSION_CHANGE. Firmware uses this to trigger an immediate
+        # light-sleep without waiting for the 20-min %-stall fallback.
+        "locked": bool(tray_state and tray_state.host_locked),
     }
     return payload
 
@@ -414,6 +418,15 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
     session = Session(client)
     await session.setup_refresh_subscription()
 
+    # Wire the thread-safe refresh trampoline so the host-lock listener can
+    # wake this poll loop instantly on lock/unlock. Cleared in the finally
+    # below so callbacks during a reconnect gap are harmless no-ops.
+    if tray_state is not None and tray_state.loop is not None:
+        loop = tray_state.loop
+        tray_state.request_refresh = lambda: loop.call_soon_threadsafe(
+            session.refresh_requested.set
+        )
+
     last_poll = 0.0  # D-03: poll immediately on first connect
     used_successfully = False
     consecutive_failures = 0  # D-03: zombie-link break counter
@@ -430,7 +443,7 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
                         tray_state.set_error("token expired — run claude login")
                 else:
                     try:
-                        payload = await poll_api(token)
+                        payload = await poll_api(token, tray_state)
                     except AuthError:
                         # Real 401/403 — token genuinely needs a refresh.
                         if tray_state:
@@ -464,6 +477,10 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
             # being left frozen on stale data after Quit (SC#3 graceful shutdown).
             await _wait_first(session.refresh_requested, stop_event, timeout=TICK)
     finally:
+        # Drop the refresh trampoline so a lock event during the reconnect
+        # gap doesn't try to set a defunct session's event.
+        if tray_state is not None:
+            tray_state.request_refresh = None
         # Clean GATT disconnect on the way out — this is what tells the peripheral
         # the link is gone. WinRT can surface a raw OSError (not BleakError) here,
         # so swallow both; the link tears down regardless once we exit.

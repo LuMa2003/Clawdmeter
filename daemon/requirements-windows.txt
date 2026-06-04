@@ -4,3 +4,7 @@ bleak
 httpx
 pystray
 Pillow
+# pywin32 — used for Win32 session lock/unlock notifications
+# (WTSRegisterSessionNotification). The lock state is fed to the firmware
+# so the device can light-sleep immediately when the host PC is locked.
+pywin32

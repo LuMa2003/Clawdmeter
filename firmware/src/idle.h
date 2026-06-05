@@ -39,10 +39,6 @@ void idle_set_host_locked(bool locked);
 // STATE_LIGHT_SLEEP_IDLE. Equal values are silent (no FSM effect).
 void idle_note_data_delta(int new_s_int, int new_w_int);
 
-// True when no real delta in s/w has been seen for IDLE_ANIM_FREEZE_MS.
-// ui_tick_anim() checks this to stop redrawing the spinner during idle.
-bool idle_animation_should_freeze(void);
-
 // ---- Deep sleep (Phase C) ----
 
 // Pure helper: compute seconds from the last known host wall-clock to the

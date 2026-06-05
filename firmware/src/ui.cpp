@@ -1,6 +1,4 @@
 #include "ui.h"
-#include "splash.h"
-#include "idle.h"
 #include <lvgl.h>
 #include "logo.h"
 #include "icons.h"
@@ -100,7 +98,7 @@ static void compute_layout(const BoardCaps& c) {
 #define COL_RED       THEME_RED
 #define COL_BAR_BG    THEME_BAR_BG
 
-// ---- Usage screen widgets (single non-splash view) ----
+// ---- Usage screen widgets ----
 static lv_obj_t* usage_container;
 static lv_obj_t* lbl_title;
 static lv_obj_t* usage_group;   // the two usage panels — shown when connected
@@ -113,77 +111,14 @@ static lv_obj_t* bar_weekly;
 static lv_obj_t* lbl_weekly_pct;
 static lv_obj_t* lbl_weekly_label;
 static lv_obj_t* lbl_weekly_reset;
-static lv_obj_t* lbl_anim;      // status line: connection state + whimsical idle
 
 // ---- Battery indicator (shared, on top) ----
 static lv_obj_t* battery_img;
 static lv_obj_t* logo_img;
 static lv_image_dsc_t battery_dscs[5];  // empty, low, medium, full, charging
-
-// ---- Shared ----
 static lv_image_dsc_t logo_dsc;
-static screen_t current_screen = SCREEN_USAGE;
-static bool     s_ble_connected = false;   // cached BLE connection state
-static uint32_t connected_at_ms = 0;       // when we last entered CONNECTED ("Connected" dwell)
 
-// Animation state
-static uint32_t anim_last_ms = 0;
-static uint8_t anim_spinner_idx = 0;
-static uint8_t anim_phase = 0;
-static uint8_t anim_msg_idx = 0;
-static uint32_t anim_msg_start = 0;
-#define ANIM_MSG_MS     4000
-
-static const char* const spinner_frames[] = {
-    "\xC2\xB7", "\xE2\x9C\xBB", "\xE2\x9C\xBD",
-    "\xE2\x9C\xB6", "\xE2\x9C\xB3", "\xE2\x9C\xA2",
-};
-#define SPINNER_COUNT 6
-#define SPINNER_PHASES (2 * (SPINNER_COUNT - 1))  // 10: ping-pong 0..5..0
-
-// Spinner timing halved vs. original — saves repaint cycles during screen-on.
-// Original: {260, 130, 130, 130, 130, 260}. Doubled values = ~half the FPS,
-// still feels alive but spins noticeably slower. Combined with the
-// idle_animation_should_freeze() check below, the spinner also stops entirely
-// after 5 min of no s/w change so it isn't just decoration during idle.
-static const uint16_t spinner_ms[SPINNER_COUNT] = {
-    520, 260, 260, 260, 260, 520,
-};
-
-static const char* const anim_messages[] = {
-    "Accomplishing", "Elucidating", "Perusing",
-    "Actioning", "Enchanting", "Philosophising",
-    "Actualizing", "Envisioning", "Pondering",
-    "Baking", "Finagling", "Pontificating",
-    "Booping", "Flibbertigibbeting", "Processing",
-    "Brewing", "Forging", "Puttering",
-    "Calculating", "Forming", "Puzzling",
-    "Cerebrating", "Frolicking", "Reticulating",
-    "Channelling", "Generating", "Ruminating",
-    "Churning", "Germinating", "Scheming",
-    "Clauding", "Hatching", "Schlepping",
-    "Coalescing", "Herding", "Shimmying",
-    "Cogitating", "Honking", "Shucking",
-    "Combobulating", "Hustling", "Simmering",
-    "Computing", "Ideating", "Smooshing",
-    "Concocting", "Imagining", "Spelunking",
-    "Conjuring", "Incubating", "Spinning",
-    "Considering", "Inferring", "Stewing",
-    "Contemplating", "Jiving", "Sussing",
-    "Cooking", "Manifesting", "Synthesizing",
-    "Crafting", "Marinating", "Thinking",
-    "Creating", "Meandering", "Tinkering",
-    "Crunching", "Moseying", "Transmuting",
-    "Deciphering", "Mulling", "Unfurling",
-    "Deliberating", "Mustering", "Unravelling",
-    "Determining", "Musing", "Vibing",
-    "Discombobulating", "Noodling", "Wandering",
-    "Divining", "Percolating", "Whirring",
-    "Doing", "Wibbling",
-    "Effecting", "Wizarding",
-    "Working", "Wrangling",
-};
-#define ANIM_MSG_COUNT (sizeof(anim_messages) / sizeof(anim_messages[0]))
+static bool s_ble_connected = false;   // cached BLE connection state
 
 static lv_color_t pct_color(float pct) {
     if (pct >= 80.0f) return COL_RED;
@@ -202,9 +137,6 @@ static void format_reset_time(int mins, char* buf, size_t len) {
         snprintf(buf, len, "Resets in %dd %dh", mins / 1440, (mins % 1440) / 60);
     }
 }
-
-// Forward decls — callbacks defined near ui_show_screen below
-static void global_click_cb(lv_event_t* e);
 
 static lv_obj_t* make_panel(lv_obj_t* parent, int x, int y, int w, int h) {
     lv_obj_t* panel = lv_obj_create(parent);
@@ -336,7 +268,6 @@ static void init_usage_screen(lv_obj_t* scr) {
     lv_obj_set_style_border_width(usage_container, 0, 0);
     lv_obj_set_style_pad_all(usage_container, 0, 0);
     lv_obj_clear_flag(usage_container, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(usage_container, global_click_cb, LV_EVENT_CLICKED, NULL);
 
     lbl_title = lv_label_create(usage_container);
     lv_label_set_text(lbl_title, "Usage");
@@ -364,13 +295,6 @@ static void init_usage_screen(lv_obj_t* scr) {
                      &bar_weekly, &lbl_weekly_reset);
 
     build_pair_group(usage_container);
-
-    // Status line — always visible on the usage view. Driven by ui_tick_anim().
-    lbl_anim = lv_label_create(usage_container);
-    lv_label_set_text(lbl_anim, "");
-    lv_obj_set_style_text_font(lbl_anim, &font_mono_32, 0);
-    lv_obj_set_style_text_color(lbl_anim, COL_ACCENT, 0);
-    lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, -15);
 }
 
 // ======== Public API ========
@@ -386,11 +310,6 @@ void ui_init(void) {
     init_battery_icons();
 
     init_usage_screen(scr);
-    splash_init(scr);
-
-    if (splash_get_root()) {
-        lv_obj_add_event_cb(splash_get_root(), global_click_cb, LV_EVENT_CLICKED, NULL);
-    }
 
     logo_img = lv_image_create(scr);
     lv_image_set_src(logo_img, &logo_dsc);
@@ -423,92 +342,11 @@ void ui_update(const UsageData* data) {
     lv_label_set_text(lbl_weekly_reset, buf);
 }
 
-void ui_tick_anim(void) {
-    if (current_screen != SCREEN_USAGE) return;
-    // Freeze the spinner entirely when no Anthropic delta has landed for
-    // IDLE_ANIM_FREEZE_MS. Visual cue that nothing is processing AND saves
-    // a small amount of repaint cost during the data-stall window.
-    if (idle_animation_should_freeze()) return;
-
-    uint32_t now = lv_tick_get();
-
-    if (now - anim_msg_start >= ANIM_MSG_MS) {
-        anim_msg_idx = (anim_msg_idx + 1) % ANIM_MSG_COUNT;
-        anim_msg_start = now;
-    }
-
-    if (now - anim_last_ms < spinner_ms[anim_spinner_idx]) return;
-    anim_last_ms = now;
-    anim_phase = (anim_phase + 1) % SPINNER_PHASES;
-    anim_spinner_idx = (anim_phase < SPINNER_COUNT) ? anim_phase
-                                                    : (SPINNER_PHASES - anim_phase);
-
-    // Status text by priority. Whimsical messages only when connected & settled.
-    const char* text;
-    if (!s_ble_connected) {
-        text = ble_has_bonds() ? "Disconnected" : "Pairing";
-    } else if (now - connected_at_ms < 5000) {
-        text = "Connected";
-    } else {
-        text = anim_messages[anim_msg_idx];
-    }
-
-    // All states share the whimsical style: "<glyph> <Title-case word>…"
-    static char buf[80];
-    snprintf(buf, sizeof(buf), "%s %s\xE2\x80\xA6",
-             spinner_frames[anim_spinner_idx], text);
-    lv_label_set_text(lbl_anim, buf);
-}
-
-static screen_t prev_non_splash_screen = SCREEN_USAGE;
-static void apply_battery_visibility(void) {
-    if (!battery_img) return;
-    if (current_screen == SCREEN_SPLASH) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
-    else                                  lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
-}
-
-static void global_click_cb(lv_event_t* e) {
-    (void)e;
-    if (current_screen == SCREEN_SPLASH) ui_show_screen(prev_non_splash_screen);
-    else                                  ui_show_screen(SCREEN_SPLASH);
-}
-
-void ui_show_screen(screen_t screen) {
-    lv_obj_add_flag(usage_container, LV_OBJ_FLAG_HIDDEN);
-    splash_hide();
-
-    switch (screen) {
-    case SCREEN_SPLASH:  splash_show(); break;
-    case SCREEN_USAGE:   lv_obj_clear_flag(usage_container, LV_OBJ_FLAG_HIDDEN); break;
-    default: break;
-    }
-
-    if (logo_img) {
-        if (screen == SCREEN_SPLASH) lv_obj_add_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
-        else                          lv_obj_clear_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
-    }
-
-    if (screen != SCREEN_SPLASH) prev_non_splash_screen = screen;
-    current_screen = screen;
-    apply_battery_visibility();
-}
-
-void ui_toggle_splash(void) {
-    if (current_screen == SCREEN_SPLASH) ui_show_screen(prev_non_splash_screen);
-    else                                  ui_show_screen(SCREEN_SPLASH);
-}
-
-screen_t ui_get_current_screen(void) {
-    return current_screen;
-}
-
 void ui_update_ble_status(ble_state_t state, const char* name, const char* mac) {
     (void)name; (void)mac;
-    bool was_connected = s_ble_connected;
     s_ble_connected = (state == BLE_STATE_CONNECTED);
 
-    // Connected → usage panels; otherwise → pairing hint. The bottom status
-    // line carries the live state word (Connected / Disconnected / Pairing).
+    // Connected → usage panels; otherwise → pairing hint.
     if (usage_group && pair_group) {
         if (s_ble_connected) {
             lv_obj_clear_flag(usage_group, LV_OBJ_FLAG_HIDDEN);
@@ -518,8 +356,6 @@ void ui_update_ble_status(ble_state_t state, const char* name, const char* mac) 
             lv_obj_clear_flag(pair_group, LV_OBJ_FLAG_HIDDEN);
         }
     }
-
-    if (s_ble_connected && !was_connected) connected_at_ms = lv_tick_get();
 }
 
 void ui_update_battery(int percent, bool charging) {
@@ -538,5 +374,4 @@ void ui_update_battery(int percent, bool charging) {
         idx = 3;
     }
     lv_image_set_src(battery_img, &battery_dscs[idx]);
-    apply_battery_visibility();
 }

@@ -172,11 +172,6 @@ void idle_note_data_delta(int new_s_int, int new_w_int) {
     }
 }
 
-bool idle_animation_should_freeze(void) {
-    if (last_data_delta_ms == 0) return false;            // no delta seen yet → keep animating
-    return (millis() - last_data_delta_ms) >= IDLE_ANIM_FREEZE_MS;
-}
-
 void idle_tick(void) {
     uint32_t now = millis();
 

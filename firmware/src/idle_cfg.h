@@ -16,11 +16,6 @@
 // Max plan that integer can stall 20-30 min during real coding.
 #define IDLE_DATA_TIMEOUT_MS        (20UL * 60UL * 1000UL)
 
-// Spinner freeze threshold — stops animating after this long with no delta.
-// Shorter than IDLE_DATA_TIMEOUT_MS so the visual cue lands while the
-// screen is still on.
-#define IDLE_ANIM_FREEZE_MS         (5UL * 60UL * 1000UL)
-
 // Work window. Python weekday() — Mon=0 .. Sun=6. Window is [START, END)
 // hours, so 7..18 == 07:00 inclusive through 17:59 inclusive.
 #define IDLE_WORK_HOUR_START        7

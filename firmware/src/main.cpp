@@ -8,8 +8,6 @@
 #include "data.h"
 #include "ui.h"
 #include "ble.h"
-#include "splash.h"
-#include "usage_rate.h"
 #include "idle.h"
 #include "idle_cfg.h"
 #include "brightness.h"
@@ -148,12 +146,10 @@ void setup() {
     // imperceptible on a status display.
     setCpuFrequencyMhz(80);
 
-    // Capture the wake cause BEFORE doing anything else — the value is only
-    // meaningful until the next esp_*_sleep call clears it. Used to decide
-    // boot screen (cold boot → splash, wake from deep sleep → usage view).
+    // Log the wake cause once for diagnostics — useful when a deep-sleep
+    // wake-from-timer or BOOT-button looks unexpected. The usage view is
+    // the only screen now, so wake_cause has no UI-level effect.
     const esp_sleep_wakeup_cause_t wake_cause = esp_sleep_get_wakeup_cause();
-    const bool waking_from_deep_sleep =
-        (wake_cause == ESP_SLEEP_WAKEUP_TIMER || wake_cause == ESP_SLEEP_WAKEUP_EXT1);
     Serial.printf("{\"ready\":true,\"wake_cause\":%d}\n", (int)wake_cause);
 
     board_init();
@@ -192,11 +188,6 @@ void setup() {
     ui_init();
     ui_update_ble_status(ble_get_state(), ble_get_device_name(), ble_get_mac_address());
     ui_update_battery(power_hal_battery_pct(), power_hal_is_charging());
-    // Cold boot lands on splash (its long-standing role as the "look! a
-    // device!" intro screen). Wake-from-deep-sleep is functional — the
-    // user is already familiar with the device and wants the dashboard
-    // back where it was. Wake-cause was captured at the top of setup().
-    ui_show_screen(waking_from_deep_sleep ? SCREEN_USAGE : SCREEN_SPLASH);
 
     Serial.printf("Dashboard ready (%s, %dx%d), waiting for data on BLE...\n",
         board_caps().name, W, H);
@@ -289,11 +280,9 @@ static void deep_sleep_tick(void) {
 void loop() {
     idle_tick();
     lv_timer_handler();
-    ui_tick_anim();
     ble_tick();
     power_hal_tick();
     imu_hal_tick();
-    splash_tick();
     // Rotation transition (blank + ramp) would fight the idle fade — skip
     // ticks while the panel is dark. A rotation that happens during sleep
     // is detected by the next tick after wake and ramped in then.
@@ -355,14 +344,6 @@ void loop() {
             idle_set_host_locked(usage.host_locked);
             idle_note_data_delta((int)usage.session_pct, (int)usage.weekly_pct);
 
-            int g_before = usage_rate_group();
-            usage_rate_sample(usage.session_pct);
-            int g_after = usage_rate_group();
-            if (g_after != g_before) {
-                Serial.printf("usage rate: group %d -> %d (s=%.2f%%)\n",
-                    g_before, g_after, usage.session_pct);
-                if (splash_is_active()) splash_pick_for_current_rate();
-            }
             ui_update(&usage);
             ble_send_ack();
         } else {

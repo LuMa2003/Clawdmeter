@@ -75,6 +75,13 @@ bool idle_consume_wake_press(void) {
     if (state == STATE_ASLEEP || state == STATE_LIGHT_SLEEP_IDLE || state == STATE_FADING_OUT) {
         uint32_t now = millis();
         last_activity_ms = now;
+        // Treat an explicit user action as a fresh data-activity stamp too.
+        // Without this, waking from a data-stall sleep (20-min %-unchanged
+        // trigger in idle_tick) would re-evaluate the stall condition on the
+        // very next loop iteration and immediately re-fade — making tap/BOOT
+        // wake look broken. Mirrors what idle_set_host_locked(false) already
+        // does on unlock.
+        last_data_delta_ms = now;
         // Reverse the panel-sleep side effect when waking from a fully-dark
         // state. STATE_FADING_OUT mid-fade hasn't reached the sleep call yet.
         if (state == STATE_ASLEEP || state == STATE_LIGHT_SLEEP_IDLE) {

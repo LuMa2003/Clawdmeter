@@ -170,6 +170,15 @@ static void check_serial_cmd() {
         if (c == '\n' || c == '\r') {
             cmd_buf[cmd_pos] = '\0';
             if (strcmp(cmd_buf, "screenshot") == 0) send_screenshot();
+            // Temporary Phase E verification: dump the live PM-lock table so we
+            // can see whether anything's permanently holding the APB/CPU clock
+            // up and preventing light sleep. Remove this command after we're
+            // happy that PM engages cleanly.
+            else if (strcmp(cmd_buf, "pmlocks") == 0) {
+                Serial.println("--- pm locks ---");
+                esp_pm_dump_locks(stdout);
+                Serial.println("--- end pm locks ---");
+            }
             cmd_pos = 0;
         } else if (cmd_pos < CMD_BUF_SIZE - 1) {
             cmd_buf[cmd_pos++] = c;

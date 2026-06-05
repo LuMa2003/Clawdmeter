@@ -24,11 +24,6 @@
 #define IIC_SDA              15
 #define IIC_SCL              14
 
-// ---- Touch (CST9220 via TouchDrvCST92xx library) ----
-#define TP_INT               11
-#define TP_RST               2     // shared with LCD_RESET
-#define CST9220_ADDR         0x5A
-
 // ---- PMU ----
 #define AXP2101_ADDR         0x34
 

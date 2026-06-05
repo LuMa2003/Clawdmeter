@@ -31,9 +31,3 @@
 // desk plugged in — also covers battery-less hardware that's always on USB.
 // Set true to sleep regardless of power source.
 #define IDLE_SLEEP_WHEN_CHARGING    false
-
-// When true, a touch on the dark panel wakes the device (first touch is
-// consumed for wake only, second touch acts normally). When false, touch is
-// fully ignored during sleep — useful if cats/sleeves brushing the panel
-// overnight would be a problem.
-#define IDLE_WAKE_ON_TOUCH          true

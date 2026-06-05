@@ -16,7 +16,6 @@
 
 #include "hal/board_caps.h"
 #include "hal/display_hal.h"
-#include "hal/touch_hal.h"
 #include "hal/input_hal.h"
 #include "hal/power_hal.h"
 #include "hal/imu_hal.h"
@@ -49,52 +48,6 @@ static void my_flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_m
 static void rounder_cb(lv_event_t* e) {
     lv_area_t* area = (lv_area_t*)lv_event_get_param(e);
     display_hal_round_area(&area->x1, &area->y1, &area->x2, &area->y2);
-}
-
-// Touch policy is driven by IDLE_WAKE_ON_TOUCH:
-//   true  → a press edge while asleep wakes the device and the first touch is
-//           swallowed (mirrors the button wake-consumption); a press while
-//           awake counts as activity.
-//   false → touch never counts as activity and is fully swallowed while the
-//           panel is dark, so pets/sleeves can't wake it overnight and LVGL
-//           can't quietly toggle splash<->usage on a black panel.
-static void my_touch_cb(lv_indev_t* indev, lv_indev_data_t* data) {
-    uint16_t x, y;
-    bool pressed;
-    touch_hal_read(&x, &y, &pressed);
-    const bool raw_pressed = pressed;
-
-    if (IDLE_WAKE_ON_TOUCH) {
-        static bool touch_was = false;
-        static bool touch_wake_swallowed = false;
-        if (raw_pressed && !touch_was) {
-            // Press edge — consume as wake if asleep.
-            if (idle_consume_wake_press()) {
-                touch_wake_swallowed = true;
-                pressed = false;
-            }
-        } else if (!raw_pressed && touch_was) {
-            // Release edge.
-            if (touch_wake_swallowed) {
-                touch_wake_swallowed = false;
-                pressed = false;
-            }
-        } else if (raw_pressed && touch_wake_swallowed) {
-            // Held finger through wake — keep hiding until release.
-            pressed = false;
-        }
-        touch_was = raw_pressed;
-    } else if (idle_is_asleep()) {
-        pressed = false;
-    }
-
-    if (pressed) {
-        data->point.x = x;
-        data->point.y = y;
-        data->state = LV_INDEV_STATE_PRESSED;
-    } else {
-        data->state = LV_INDEV_STATE_RELEASED;
-    }
 }
 
 // Parse a JSON line into UsageData.
@@ -212,7 +165,6 @@ void setup() {
 
     power_hal_init();
     imu_hal_init();
-    touch_hal_init();
 
     // ---- LVGL ----
     const int W = board_caps().width;
@@ -231,9 +183,8 @@ void setup() {
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_add_event_cb(disp, rounder_cb, LV_EVENT_INVALIDATE_AREA, NULL);
 
-    lv_indev_t* indev = lv_indev_create();
-    lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
-    lv_indev_set_read_cb(indev, my_touch_cb);
+    // No LVGL input device — the device is display-only. Touch hardware
+    // (CST9220) is no longer driven; its INT line stays floating.
 
     ble_init();
     input_hal_init();

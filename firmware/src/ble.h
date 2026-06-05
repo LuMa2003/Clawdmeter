@@ -26,7 +26,3 @@ void ble_request_refresh(void);
 // the radio goes dark for hours. NOT a full NimBLE deinit — bonds persist
 // in NVS so the device reconnects without re-pairing on wake.
 void ble_disconnect_all(void);
-
-// BLE HID keyboard
-void ble_keyboard_press(uint8_t key, uint8_t modifier);
-void ble_keyboard_release(void);

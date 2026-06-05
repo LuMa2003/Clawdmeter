@@ -1,7 +1,6 @@
 #include "ble.h"
 #include <Arduino.h>
 #include <NimBLEDevice.h>
-#include <NimBLEHIDDevice.h>
 
 #define DEVICE_NAME "Clawdmeter"
 
@@ -13,50 +12,7 @@
 
 #define BLE_BUF_SIZE 512
 
-// HID keyboard report descriptor (standard 6-KRO boot-protocol-compatible).
-// Includes the LED output report (Num/Caps/Scroll Lock indicators) — without
-// it macOS's Keyboard Setup Assistant flags the device as "unidentifiable"
-// because the descriptor doesn't look like a complete keyboard.
-static const uint8_t HID_REPORT_MAP[] = {
-    0x05, 0x01,  // Usage Page (Generic Desktop)
-    0x09, 0x06,  // Usage (Keyboard)
-    0xA1, 0x01,  // Collection (Application)
-    0x85, 0x01,  //   Report ID (1)
-    0x05, 0x07,  //   Usage Page (Key Codes)
-    0x19, 0xE0,  //   Usage Minimum (224) - Left Control
-    0x29, 0xE7,  //   Usage Maximum (231) - Right GUI
-    0x15, 0x00,  //   Logical Minimum (0)
-    0x25, 0x01,  //   Logical Maximum (1)
-    0x75, 0x01,  //   Report Size (1)
-    0x95, 0x08,  //   Report Count (8)
-    0x81, 0x02,  //   Input (Data, Variable, Absolute) - Modifier byte
-    0x95, 0x01,  //   Report Count (1)
-    0x75, 0x08,  //   Report Size (8)
-    0x81, 0x01,  //   Input (Constant) - Reserved byte
-    // LED output report — required for macOS to treat this as a full keyboard.
-    0x95, 0x05,  //   Report Count (5)
-    0x75, 0x01,  //   Report Size (1)
-    0x05, 0x08,  //   Usage Page (LEDs)
-    0x19, 0x01,  //   Usage Minimum (Num Lock)
-    0x29, 0x05,  //   Usage Maximum (Kana)
-    0x91, 0x02,  //   Output (Data, Variable, Absolute) - LED report
-    0x95, 0x01,  //   Report Count (1)
-    0x75, 0x03,  //   Report Size (3)
-    0x91, 0x01,  //   Output (Constant) - LED report padding
-    0x95, 0x06,  //   Report Count (6)
-    0x75, 0x08,  //   Report Size (8)
-    0x15, 0x00,  //   Logical Minimum (0)
-    0x25, 0x65,  //   Logical Maximum (101)
-    0x05, 0x07,  //   Usage Page (Key Codes)
-    0x19, 0x00,  //   Usage Minimum (0)
-    0x29, 0x65,  //   Usage Maximum (101)
-    0x81, 0x00,  //   Input (Data, Array) - Key array (6 keys)
-    0xC0,        // End Collection
-};
-
 static NimBLEServer* server = nullptr;
-static NimBLEHIDDevice* hid_dev = nullptr;
-static NimBLECharacteristic* input_kbd = nullptr;
 static NimBLECharacteristic* tx_char = nullptr;
 static NimBLECharacteristic* rx_char = nullptr;
 static NimBLECharacteristic* req_char = nullptr;
@@ -71,26 +27,16 @@ static char mac_str[18];
 static void start_advertising() {
     NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
     adv->reset();
-    // Primary advertising packet (≤31 bytes):
-    //   flags (3) + appearance (4) + HID service 0x1812 (4) + name "Clawdmeter" (12)
-    //   = 23 bytes. macOS Bluetooth Settings only surfaces BLE-only devices
-    //   that explicitly advertise the standard HID service UUID (0x1812) —
-    //   without it the device is recognized internally but hidden from the
-    //   GUI nearby-devices list.
-    adv->setAppearance(HID_KEYBOARD);
-    adv->addServiceUUID(NimBLEUUID((uint16_t)0x1812));  // BLE HID Service
+    // Primary advertising packet: name + the 128-bit custom data-service UUID.
+    // No HID service is exposed (device is display-only), no special
+    // appearance code — Windows BLE scanners pick the device up by name and
+    // by the custom UUID, which is all the daemon needs.
     adv->setName(DEVICE_NAME);
-    // Scan response carries the 128-bit custom data-service UUID for active
-    // scanners (the host daemon scans actively).
     NimBLEAdvertisementData scanResp;
     scanResp.setCompleteServices(NimBLEUUID(SERVICE_UUID));
     adv->setScanResponseData(scanResp);
     adv->enableScanResponse(true);
     bool ok = adv->start();
-    // Only reflect ADVERTISING in the UI state when no client is connected.
-    // With MAX_CONNECTIONS=2, onConnect re-advertises to fill the second slot;
-    // without this guard the UI would flip CONNECTED → ADVERTISING on every
-    // first connect and never come back until a second client arrived.
     if (!server || server->getConnectedCount() == 0) {
         state = BLE_STATE_ADVERTISING;
     }
@@ -121,12 +67,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         //   (1+8) * 75 ms = 675 ms < 5000 ms ✓
         s->updateConnParams(info.getConnHandle(), 30, 60, 8, 500);
 
-        // Keep advertising while a connection slot is still free so a second
-        // central (e.g. the host daemon alongside an OS-held HID link) can
-        // discover and connect. NimBLE auto-stops advertising on each accept.
-        if (s->getConnectedCount() < CONFIG_BT_NIMBLE_MAX_CONNECTIONS) {
-            need_advertise = true;
-        }
+        // Only one connection slot (daemon). NimBLE auto-stops advertising on
+        // accept; no need to restart it until the daemon disconnects.
     }
 
     void onDisconnect(NimBLEServer* s, NimBLEConnInfo& info, int reason) override {
@@ -176,24 +118,6 @@ void ble_init(void) {
     server = NimBLEDevice::createServer();
     static ServerCallbacks serverCb;
     server->setCallbacks(&serverCb);
-
-    // --- HID keyboard service ---
-    hid_dev = new NimBLEHIDDevice(server);
-    hid_dev->setReportMap((uint8_t*)HID_REPORT_MAP, sizeof(HID_REPORT_MAP));
-    hid_dev->setManufacturer("Anthropic");
-    // PnP ID: (vendorIdSource, vendorId, productId, version).
-    // Source 1 = Bluetooth SIG, vendor 0x02E5 = Espressif. Originally claimed
-    // Apple's USB vendor 0x05AC + Magic Keyboard product 0x820A — macOS
-    // validates Apple-claimed HIDs against known device IDs and silently
-    // refuses to surface a Connect button for spoofers.
-    hid_dev->setPnp(0x01, 0x02E5, 0x0001, 0x0100);
-    // country=33 (US ANSI). Setting this to 0 ("not supported") causes macOS
-    // to launch the Keyboard Setup Assistant on first pair asking the user
-    // to identify the layout — we only ever send Space / Shift+Tab so the
-    // physical layout is irrelevant; advertise a known one to skip the wizard.
-    hid_dev->setHidInfo(33, 0x02);
-    hid_dev->setBatteryLevel(100);
-    input_kbd = hid_dev->getInputReport(1);  // report ID 1
 
     // --- Custom data service ---
     NimBLEService* svc = server->createService(SERVICE_UUID);
@@ -295,8 +219,8 @@ void ble_disconnect_all(void) {
 
     if (!server) return;
 
-    // Disconnect every connected peer. There are at most 2 (the daemon plus
-    // the OS holding the HID link), so a small loop is fine.
+    // Single connection slot — there's at most one peer (the daemon), but
+    // the loop is harmless in case a future code path connects more.
     const uint8_t n = server->getConnectedCount();
     for (uint8_t i = 0; i < n; i++) {
         NimBLEConnInfo info = server->getPeerInfo(i);
@@ -306,19 +230,4 @@ void ble_disconnect_all(void) {
         }
     }
     Serial.printf("BLE: disconnected %u peer(s)\n", n);
-}
-
-void ble_keyboard_press(uint8_t key, uint8_t modifier) {
-    if (state != BLE_STATE_CONNECTED || !input_kbd) return;
-    // HID report: [modifier, reserved, key1, key2, key3, key4, key5, key6]
-    uint8_t report[8] = {modifier, 0, key, 0, 0, 0, 0, 0};
-    input_kbd->setValue(report, sizeof(report));
-    input_kbd->notify();
-}
-
-void ble_keyboard_release(void) {
-    if (state != BLE_STATE_CONNECTED || !input_kbd) return;
-    uint8_t report[8] = {0};
-    input_kbd->setValue(report, sizeof(report));
-    input_kbd->notify();
 }

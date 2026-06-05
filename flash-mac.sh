@@ -1,23 +1,12 @@
 #!/bin/bash
 # Build and flash Clawdmeter firmware on macOS.
 # Usage:
-#   ./flash-mac.sh <board>                       # auto-detect /dev/cu.usbmodem*
-#   ./flash-mac.sh <board> /dev/cu.usbmodem1101  # explicit USB serial port
-#
-# <board> is the PlatformIO env name, e.g. waveshare_amoled_216 or waveshare_amoled_18.
+#   ./flash-mac.sh                       # auto-detect /dev/cu.usbmodem*
+#   ./flash-mac.sh /dev/cu.usbmodem1101  # explicit USB serial port
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BOARD="$1"
-PORT="$2"
-
-if [ -z "$BOARD" ]; then
-    echo "Error: board env name is required."
-    echo "Usage: $0 <board> [port]"
-    echo "Available boards:"
-    grep -E '^\[env:' "$SCRIPT_DIR/firmware/platformio.ini" | sed 's/\[env:/  /;s/\]//'
-    exit 1
-fi
+PORT="$1"
 
 if [ -z "$PORT" ]; then
     PORT=$(ls /dev/cu.usbmodem* 2>/dev/null | head -1)
@@ -34,12 +23,11 @@ if ! command -v pio >/dev/null; then
 fi
 
 echo "=== Flashing Clawdmeter ==="
-echo "Board: $BOARD"
-echo "Port:  $PORT"
+echo "Port: $PORT"
 echo ""
 
 cd "$SCRIPT_DIR/firmware"
-pio run -e "$BOARD" -t upload --upload-port "$PORT"
+pio run -e waveshare_amoled_216 -t upload --upload-port "$PORT"
 
 echo ""
 echo "=== Done ==="
